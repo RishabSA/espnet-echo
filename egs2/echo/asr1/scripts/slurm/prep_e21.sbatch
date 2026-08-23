@@ -8,7 +8,7 @@
 #SBATCH --output=slurm-%x-%j.out
 
 # corpus prep + model predownload, all CPU: run once before the GPU job.
-# submit from the recipe dir (egs2/earnings21/asr1) on /work/hdd so
+# submit from the recipe dir (egs2/echo/asr1) on /work/hdd so
 # SLURM_SUBMIT_DIR is the recipe root the scripts assume as cwd.
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
