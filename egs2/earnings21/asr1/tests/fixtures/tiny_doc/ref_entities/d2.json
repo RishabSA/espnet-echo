@@ -1,0 +1,35 @@
+{
+  "doc_id": "d2",
+  "source": "nlp_tags",
+  "entities": [
+    {
+      "entity_id": "e2",
+      "category": "ORG",
+      "canonical_surface": "Zelmark",
+      "occurrences": [
+        {
+          "occ_id": "e2#0",
+          "ref_word_span": [
+            6,
+            6
+          ],
+          "surface": "Zelmark",
+          "start": 2.7,
+          "end": 3.15,
+          "speaker": "spk1"
+        },
+        {
+          "occ_id": "e2#1",
+          "ref_word_span": [
+            16,
+            16
+          ],
+          "surface": "Zelmark",
+          "start": 7.2,
+          "end": 7.65,
+          "speaker": "spk1"
+        }
+      ]
+    }
+  ]
+}

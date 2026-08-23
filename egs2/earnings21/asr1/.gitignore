@@ -1,0 +1,11 @@
+# local-only artifacts (data/ is already ignored by the espnet root .gitignore)
+/runs/
+/docs/
+/tools/
+CLAUDE.md
+
+# environment and caches
+.venv/
+.pytest_cache/
+.ruff_cache/
+.env

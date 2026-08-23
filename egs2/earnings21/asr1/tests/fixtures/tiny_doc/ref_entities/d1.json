@@ -1,0 +1,46 @@
+{
+  "doc_id": "d1",
+  "source": "nlp_tags",
+  "entities": [
+    {
+      "entity_id": "e1",
+      "category": "PERSON",
+      "canonical_surface": "Kowalski",
+      "occurrences": [
+        {
+          "occ_id": "e1#0",
+          "ref_word_span": [
+            12,
+            12
+          ],
+          "surface": "Kowalski",
+          "start": 5.4,
+          "end": 5.85,
+          "speaker": "spk1"
+        },
+        {
+          "occ_id": "e1#1",
+          "ref_word_span": [
+            19,
+            19
+          ],
+          "surface": "Kowalski",
+          "start": 8.55,
+          "end": 9.0,
+          "speaker": "spk1"
+        },
+        {
+          "occ_id": "e1#2",
+          "ref_word_span": [
+            29,
+            29
+          ],
+          "surface": "Kowalski",
+          "start": 13.05,
+          "end": 13.5,
+          "speaker": "spk1"
+        }
+      ]
+    }
+  ]
+}

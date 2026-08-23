@@ -1,0 +1,62 @@
+{
+  "_note": "hand-computed and cross-checked by scratchpad/gen_fixture.py; extend by hand at M3 per docs/07 section 7.5",
+  "n_ref_words": {
+    "d1": 39,
+    "d2": 40,
+    "d3": 39
+  },
+  "wer_openasr": {
+    "pass1": {
+      "d1": 0.07692307692307693,
+      "d2": 0.05,
+      "d3": 0.02564102564102564,
+      "corpus": 0.05084745762711865
+    },
+    "pass2": {
+      "d1": 0.02564102564102564,
+      "d2": 0.075,
+      "d3": 0.02564102564102564,
+      "corpus": 0.0423728813559322
+    }
+  },
+  "consistency": {
+    "eligible_entities": [
+      "e1",
+      "e2",
+      "e4"
+    ],
+    "excluded_entities": {
+      "e3": "one realized occurrence after the deletion; reported separately, never in the ECR denominator"
+    },
+    "pass1": {
+      "ecr_strict": 0.0,
+      "ecr_norm": 0.3333333333333333,
+      "ecr_pairwise": 0.4444444444444444,
+      "ccr": 0.3333333333333333
+    },
+    "pass2": {
+      "ecr_strict": 0.6666666666666666,
+      "ecr_norm": 1.0,
+      "ecr_pairwise": 1.0,
+      "ccr": 0.6666666666666666
+    }
+  },
+  "transitions": {
+    "n_paired_occurrences": 8,
+    "held": 0.5,
+    "repair": 0.25,
+    "damage": 0.125,
+    "lockin": 0.125,
+    "residual": 0.0,
+    "repair_minus_damage": 0.125
+  },
+  "deletions": {
+    "deleted_ref_occurrences_pass1": 1,
+    "deleted_ref_occurrences_pass2": 1
+  },
+  "oracle": {
+    "pass1_entity_occ_correct": 0.5714285714285714,
+    "oracle_entity_occ_correct": 1.0,
+    "n_realized_occurrences_eligible": 7
+  }
+}
