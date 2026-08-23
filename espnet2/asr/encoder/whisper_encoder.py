@@ -28,7 +28,10 @@ class OpenAIWhisperEncoder(AbsEncoder):
     ):
         try:
             import whisper
-            from whisper.audio import HOP_LENGTH, N_FFT, N_MELS, N_SAMPLES
+
+            # N_MELS was removed from whisper.audio when large-v3 made the mel bin
+            # count model-dependent; n_mels is read from the checkpoint dims below
+            from whisper.audio import HOP_LENGTH, N_FFT, N_SAMPLES
         except Exception as e:
             print("Error: whisper is not properly installed.")
             print(
@@ -42,7 +45,6 @@ class OpenAIWhisperEncoder(AbsEncoder):
         self.n_fft = N_FFT
         self.win_length = N_FFT
         self.hop_length = HOP_LENGTH
-        self.n_mels = N_MELS
 
         self.mel_filters = whisper.audio.mel_filters
 
@@ -55,6 +57,10 @@ class OpenAIWhisperEncoder(AbsEncoder):
         )
         self.encoders = copy.deepcopy(_model.encoder)
         self.encoders.train()
+
+        # large-v3 checkpoints use 128 mel bins; whisper.audio.N_MELS is pinned to
+        # the 80-bin models, so take the value from the loaded checkpoint instead
+        self.n_mels = _model.dims.n_mels
 
         del _model
 

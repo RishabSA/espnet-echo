@@ -18,6 +18,9 @@ dependencies = [
     "torch>=2.13.0,<2.14",
     "torchaudio>=2.11.0,<2.12",
     "tqdm>=4.70.0",
+    # engine no longer uses transformers; kept only for EnglishTextNormalizer({}) in
+    # normalize.py (whisper's own normalizer hardcodes the spelling mapping, ours is
+    # pinned empty and the frozen metric numbers depend on it)
     "transformers>=5.14.1,<5.15",
     "wordfreq>=3.1.1",
 ]

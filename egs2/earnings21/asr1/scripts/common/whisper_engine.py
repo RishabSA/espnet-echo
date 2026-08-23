@@ -1,7 +1,9 @@
 import torch
-from transformers import WhisperForConditionalGeneration, WhisperProcessor
-from transformers.generation import GenerationMixin
-from transformers.modeling_outputs import BaseModelOutput
+import whisper
+from espnet2.asr.decoder.whisper_decoder import OpenAIWhisperDecoder
+from espnet2.asr.encoder.whisper_encoder import OpenAIWhisperEncoder
+from espnet2.legacy.nets.batch_beam_search import BatchBeamSearch
+from whisper.tokenizer import Tokenizer, get_tokenizer
 
 sample_rate = 16000
 # sequences per teacher-forced rescoring forward; vocab-wide logits are ~40 MB per
@@ -17,53 +19,147 @@ def pick_device() -> torch.device:
     return torch.device("cpu")
 
 
+def tokenizer_for_vocab(n_vocab: int, language: str = "en") -> Tokenizer:
+    # whisper's own vocab arithmetic: multilingual vocabs are >= 51865 and the
+    # language-token count is what remains after the 51765 text/eot tokens
+    multilingual = n_vocab >= 51865
+    num_languages = n_vocab - 51765 - int(multilingual)
+    return get_tokenizer(
+        multilingual=multilingual,
+        num_languages=num_languages,
+        language=language if multilingual else None,
+        task="transcribe" if multilingual else None,
+    )
+
+
+class _SuppressingWhisperDecoder(OpenAIWhisperDecoder):
+    # the espnet wrapper scores the raw vocab; whisper decoding masks a standing
+    # suppression set plus blank/eot at the first content position, and beam search
+    # calls into batch_score, so the mask lives here (engine fills the attributes)
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.suppress_ids = []
+        self.blank_ids = []
+        self.sample_begin = 0
+
+    def batch_score(
+        self, ys: torch.Tensor, states: list, xs: torch.Tensor
+    ) -> tuple[torch.Tensor, list]:
+        logp, states = super().batch_score(ys, states, xs)
+        logp[:, self.suppress_ids] = float("-inf")
+        if ys.size(dim=1) == self.sample_begin:
+            logp[:, self.blank_ids] = float("-inf")
+        return logp, states
+
+
+class _WhisperBeamSearch(BatchBeamSearch):
+    # espnet's fixed-maxlen search runs every chunk to the length cap, so junk
+    # continuations of already-decoded speech keep growing and force-ended repetition
+    # loops reach the final ranking, where a confident loop can out-score the correct
+    # short hypothesis under length normalization; whisper stops once beam_size
+    # hypotheses have finished (patience 1.0), so replicate that by emptying the
+    # running set, which ends espnet's search loop
+    def post_process(self, i, maxlen, minlen, maxlenratio, running_hyps, ended_hyps):
+        remained = super().post_process(i, maxlen, minlen, maxlenratio, running_hyps, ended_hyps)
+        if len(ended_hyps) >= self.beam_size:
+            return self.batchfy([])
+        return remained
+
+
 class WhisperEngine:
     def __init__(
         self,
         model_id: str,
-        revision: str | None = None,
         device: torch.device | None = None,
+        download_dir: str | None = None,
     ) -> None:
         self.device = device if device is not None else pick_device()
-        dtype = torch.float16 if self.device.type == "cuda" else torch.float32
-        self.processor = WhisperProcessor.from_pretrained(model_id, revision=revision)
-        self.model = WhisperForConditionalGeneration.from_pretrained(
-            model_id, revision=revision, dtype=dtype
+
+        # one throwaway cpu load to learn the checkpoint dims: the espnet wrappers
+        # each reload the checkpoint internally, and the decoder wrapper silently
+        # reinitializes the token embedding if vocab_size is not exact
+        probe = whisper.load_model(model_id, device="cpu", download_root=download_dir)
+        self.dims = probe.dims
+        del probe
+
+        self.encoder = OpenAIWhisperEncoder(
+            whisper_model=model_id, download_dir=download_dir, do_pad_trim=True
         ).to(self.device)
-        self.model.eval()
+        self.decoder = _SuppressingWhisperDecoder(
+            vocab_size=self.dims.n_vocab,
+            encoder_output_size=self.dims.n_audio_state,
+            whisper_model=model_id,
+            download_dir=download_dir,
+        ).to(self.device)
+        # the wrappers call .train() during construction
+        self.encoder.eval()
+        self.decoder.eval()
+
+        self.tokenizer = tokenizer_for_vocab(self.dims.n_vocab)
+        # whisper's default suppression set (DecodingTask with suppress_tokens="-1"):
+        # non-speech symbols plus the sot/task specials; eot stays allowed, and
+        # timestamps are already discouraged by <|notimestamps|> in the primer
+        suppress = set(self.tokenizer.non_speech_tokens)
+        specials = self.tokenizer.special_tokens
+        for name in (
+            "<|startoftranscript|>", "<|startofprev|>", "<|startoflm|>",
+            "<|transcribe|>", "<|translate|>", "<|nospeech|>",
+        ):
+            if name in specials:
+                suppress.add(specials[name])
+        self.decoder.suppress_ids = sorted(suppress)
+        self.decoder.blank_ids = [self.tokenizer.encode(" ")[0], self.tokenizer.eot]
+
         self.model_id = model_id
-        self.revision = revision
 
-    def _start_ids(self, language: str, prompt: str | None) -> tuple[list[int], int]:
-        tokenizer = self.processor.tokenizer
-        start_ids = [
-            tokenizer.convert_tokens_to_ids(t)
-            for t in ("<|startoftranscript|>", f"<|{language}|>", "<|transcribe|>", "<|notimestamps|>")
-        ]
-        prefix_len = 0
+    def _autocast(self) -> torch.amp.autocast:
+        # weights stay fp32; matmuls run fp16 on cuda, everything stays fp32 elsewhere
+        return torch.amp.autocast(
+            self.device.type, dtype=torch.float16, enabled=self.device.type == "cuda"
+        )
+
+    def _tokenizer_for(self, language: str) -> Tokenizer:
+        if language == "en":
+            return self.tokenizer
+        return tokenizer_for_vocab(self.dims.n_vocab, language)
+
+    def _primer(self, language: str, prompt: str | None) -> list[int]:
+        tokenizer = self._tokenizer_for(language)
+        primer = list(tokenizer.sot_sequence_including_notimestamps)
         if prompt is not None:
-            prompt_ids = self.processor.get_prompt_ids(prompt, return_tensors="pt").flatten().tolist()
-            start_ids = prompt_ids + start_ids
-            prefix_len = len(prompt_ids)
-        return start_ids, prefix_len
+            # whisper convention: prompt sits behind <|startofprev|> and occupies at
+            # most half the text context
+            prompt_ids = tokenizer.encode(" " + prompt.strip())
+            keep = self.dims.n_text_ctx // 2 - 1
+            primer = [tokenizer.special_tokens["<|startofprev|>"]] + prompt_ids[-keep:] + primer
+        return primer
 
-    def _token_logprobs(self, features: torch.Tensor, sequences: torch.Tensor, n_return: int) -> torch.Tensor:
-        # per-token logprobs from a batched teacher-forced forward instead of
-        # compute_transition_scores: version-proof, and it puts pass-1 confidences on
-        # exactly the same raw-model scale score_text uses, which is what delta_null
-        # comparisons assume; the forward sees the full sequence including any prompt
-        # prefix, so logprobs are conditioned exactly as the decode was
-        with torch.inference_mode():
-            encoder_states = self.model.get_encoder()(features).last_hidden_state
-            encoder_states = encoder_states.repeat_interleave(n_return, dim=0)
+    def _encode(self, audios: list[torch.Tensor]) -> torch.Tensor:
+        lens = torch.tensor([a.shape[0] for a in audios], device=self.device)
+        batch = torch.zeros(len(audios), max(a.shape[0] for a in audios))
+        for i, a in enumerate(audios):
+            batch[i, : a.shape[0]] = a
 
-            pieces = []
+        with torch.inference_mode(), self._autocast():
+            enc, _, _ = self.encoder(batch.to(self.device), lens)
+        # fp32 memory keeps beam-search score math exact under autocast
+        return enc.float()  # shape: (batch, 1500, d_model)
+
+    def _token_logprobs(self, memory: torch.Tensor, sequences: torch.Tensor) -> torch.Tensor:
+        # per-token logprobs from a batched teacher-forced forward: puts pass-1
+        # confidences on exactly the same raw-model scale score_text uses, which is
+        # what delta_null comparisons assume; the forward sees the full sequence
+        # including any prompt prefix, so logprobs are conditioned as the decode was
+        hlens = torch.full((memory.shape[0],), memory.shape[1], device=self.device)
+        slens = torch.full((sequences.shape[0],), sequences.shape[1], device=self.device)
+
+        pieces = []
+        with torch.inference_mode(), self._autocast():
             for lo in range(0, sequences.shape[0], rescore_batch):
                 hi = min(lo + rescore_batch, sequences.shape[0])
-                logits = self.model(
-                    encoder_outputs=BaseModelOutput(last_hidden_state=encoder_states[lo:hi]),
-                    decoder_input_ids=sequences[lo:hi],
-                ).logits
+                logits, _ = self.decoder(
+                    memory[lo:hi], hlens[lo:hi], sequences[lo:hi], slens[lo:hi]
+                )
                 logprob_dist = torch.log_softmax(logits.float(), dim=-1)
                 target = sequences[lo:hi, 1:]  # shape: (b, seq_len - 1)
                 pieces.append(
@@ -79,69 +175,78 @@ class WhisperEngine:
         language: str = "en",
         prompt: str | None = None,
     ) -> list[list[dict]]:
-        features = self.processor(
-            [a.numpy() for a in audios], sampling_rate=sample_rate, return_tensors="pt"
-        ).input_features.to(self.device, dtype=self.model.dtype)
-        tokenizer = self.processor.tokenizer
+        tokenizer = self._tokenizer_for(language)
+        primer = self._primer(language, prompt)
+        self.decoder.sample_begin = len(primer)
 
-        # bypass Whisper's custom generate: in transformers 5 it collapses
-        # num_return_sequences to num_beams copies of the top beam (verified
-        # 2026-08-09), while the vanilla path returns genuinely distinct beams,
-        # which is the whole point of retaining n-best
-        start_ids, prefix_len = self._start_ids(language, prompt)
-        decoder_input_ids = torch.tensor([start_ids], device=self.device).repeat(len(audios), 1)
+        beam = _WhisperBeamSearch(
+            scorers={"decoder": self.decoder},
+            weights={"decoder": 1.0},
+            beam_size=num_beams,
+            vocab_size=self.dims.n_vocab,
+            sos=tokenizer.sot,
+            eos=tokenizer.eot,
+            hyp_primer=primer,
+            # rank ended hypotheses by length-normalized score, the same objective as
+            # whisper/HF beam ranking at length penalty 1.0
+            normalize_length=True,
+        )
+        # the decoder positional table has n_text_ctx rows, and the forced eos of the
+        # final search step lands on top of the last searched token, so the longest
+        # possible yseq is len(primer) + maxlen + 1; keep that at n_text_ctx exactly
+        # or the teacher-forced rescoring forward overflows the table
+        maxlen = self.dims.n_text_ctx - len(primer) - 1
 
-        with torch.inference_mode():
-            out = GenerationMixin.generate(
-                self.model,
-                features,
-                decoder_input_ids=decoder_input_ids,
-                num_beams=num_beams,
-                num_return_sequences=num_return_sequences,
-                do_sample=False,
-                output_scores=True,
-                return_dict_in_generate=True,
-            )
+        enc = self._encode(audios)
+        per_chunk = []
+        with torch.inference_mode(), self._autocast():
+            for b in range(enc.shape[0]):
+                nbest = beam.forward(x=enc[b], maxlenratio=float(-maxlen))
+                per_chunk.append(nbest[:num_return_sequences])
 
-        token_lp_full = self._token_logprobs(features, out.sequences, num_return_sequences)
-        # drop any prompt prefix so position 0 is <|startoftranscript|> and prompt
-        # words can never leak into texts or token lists
-        sequences = out.sequences[:, prefix_len:]
-        token_lp = token_lp_full[:, prefix_len:]
-        texts = self.processor.batch_decode(sequences, skip_special_tokens=True)
-        # length-penalised beam scores exist only under beam search; greedy falls back
-        # to the length-normalised sum, the same objective at penalty 1.0
-        seq_scores = getattr(out, "sequences_scores", None)
+        # one flat teacher-forced pass over every retained hypothesis
+        yseqs = [hyp.yseq.tolist() for hyps in per_chunk for hyp in hyps]
+        chunk_index = [b for b, hyps in enumerate(per_chunk) for _ in hyps]
+        max_len = max(len(y) for y in yseqs)
+        sequences = torch.full((len(yseqs), max_len), tokenizer.eot, device=self.device)
+        for i, y in enumerate(yseqs):
+            sequences[i, : len(y)] = torch.tensor(y, device=self.device)
+        token_lp = self._token_logprobs(enc[chunk_index], sequences)
 
+        eot = tokenizer.eot
         results = []
-        for b in range(len(audios)):
-            hyps = []
-            for rank in range(num_return_sequences):
-                i = b * num_return_sequences + rank
-                ids = sequences[i, 1:].tolist()
-                toks = tokenizer.convert_ids_to_tokens(ids)
-                logprobs = token_lp[i].tolist()
-
-                # keep text tokens only: specials carry no acoustic evidence and
-                # padding past end-of-text would corrupt the sums
+        row = 0
+        for hyps in per_chunk:
+            out = []
+            for rank, hyp in enumerate(hyps):
+                yseq = yseqs[row]
+                # token at position j is predicted by logits at j - 1; keep text
+                # tokens only, dropping the primer and every special past end-of-text
                 tokens = [
-                    {"id": tok_id, "tok": tok, "logprob": lp}
-                    for tok_id, tok, lp in zip(ids, toks, logprobs, strict=True)
-                    if not (tok.startswith("<|") and tok.endswith("|>"))
+                    {
+                        "id": tok_id,
+                        "tok": tokenizer.encoding.decode_single_token_bytes(tok_id).decode(
+                            "utf-8", errors="replace"
+                        ),
+                        "logprob": token_lp[row, j - 1].item(),
+                    }
+                    for j, tok_id in enumerate(yseq)
+                    if j >= len(primer) and tok_id < eot
                 ]
                 sum_logprob = sum(t["logprob"] for t in tokens)
                 avg_logprob = sum_logprob / len(tokens) if tokens else 0.0
-                hyps.append(
+                out.append(
                     {
                         "rank": rank,
-                        "text": texts[i].strip(),
+                        "text": tokenizer.decode([t["id"] for t in tokens]).strip(),
                         "tokens": tokens,
                         "sum_logprob": sum_logprob,
                         "avg_logprob": avg_logprob,
-                        "beam_score": seq_scores[i].item() if seq_scores is not None else avg_logprob,
+                        "beam_score": float(hyp.score) / (len(yseq) - 1),
                     }
                 )
-            results.append(hyps)
+                row += 1
+            results.append(out)
         return results
 
     def n_best_decode(
@@ -169,26 +274,17 @@ class WhisperEngine:
     ) -> dict:
         # teacher-forced scoring of arbitrary text; focus is a character range in text
         # whose token logprobs are summed separately (spec section 6.8, canonicalizer b)
-        inputs = self.processor(audio.numpy(), sampling_rate=sample_rate, return_tensors="pt")
-        features = inputs.input_features.to(self.device, dtype=self.model.dtype)
-        tokenizer = self.processor.tokenizer
+        tokenizer = self._tokenizer_for(language)
 
         # leading space matches Whisper's own output convention for mid-transcript words
         prefixed = " " + text.strip()
-        enc = tokenizer(prefixed, add_special_tokens=False, return_offsets_mapping=True)
-        text_ids = enc["input_ids"]
-        offsets = enc["offset_mapping"]
+        text_ids = tokenizer.encode(prefixed)
 
-        special, _ = self._start_ids(language, None)
-        eot = tokenizer.convert_tokens_to_ids("<|endoftext|>")
-        decoder_ids = torch.tensor([special + text_ids + [eot]], device=self.device)
+        special = self._primer(language, None)
+        sequence = torch.tensor([special + text_ids + [tokenizer.eot]], device=self.device)
 
-        with torch.inference_mode():
-            logits = self.model(features, decoder_input_ids=decoder_ids).logits
-        logprobs = torch.log_softmax(logits.float(), dim=-1)  # shape: (1, seq, vocab)
-        # next-token logprob for decoder position t sits at logits index t - 1
-        target = decoder_ids[0, 1:]  # shape: (seq - 1,)
-        token_lp = logprobs[0, :-1].gather(dim=-1, index=target.unsqueeze(dim=-1)).squeeze(dim=-1)
+        enc = self._encode([audio])
+        token_lp = self._token_logprobs(enc, sequence)[0]  # shape: (seq - 1,)
 
         # text token j occupies decoder position len(special) + j, so target index
         # len(special) + j - 1
@@ -200,9 +296,19 @@ class WhisperEngine:
         }
 
         if focus is not None:
+            # character offsets in the prefixed string, rebuilt from token bytes since
+            # tiktoken has no offset mapping; a piece boundary inside a multi-byte
+            # character floors to the previous character, which only fuzzes non-ASCII
+            starts, ends = [], []
+            grown = b""
+            for tok_id in text_ids:
+                starts.append(len(grown.decode("utf-8", errors="ignore")))
+                grown += tokenizer.encoding.decode_single_token_bytes(tok_id)
+                ends.append(len(grown.decode("utf-8", errors="ignore")))
+
             # offsets are relative to the prefixed string, shift the caller's range by 1
             lo, hi = focus[0] + 1, focus[1] + 1
-            idx = [j for j, (s, e) in enumerate(offsets) if s < hi and e > lo]
+            idx = [j for j, (s, e) in enumerate(zip(starts, ends, strict=True)) if s < hi and e > lo]
             if not idx:
                 raise ValueError(
                     f"focus range {focus} selects no tokens in text of length {len(text)}"

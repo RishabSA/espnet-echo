@@ -8,7 +8,7 @@ from scripts.common.whisper_engine import WhisperEngine
 
 pytestmark = pytest.mark.slow
 
-model_id = "openai/whisper-tiny"
+model_id = "tiny"
 audio_file = Path("tests/fixtures/audio/say_sample.wav")
 
 
@@ -31,8 +31,9 @@ def test_n_best_decode_shape(engine):
 
 
 def test_n_best_beams_are_distinct(engine):
-    # regression: transformers 5's Whisper generate wrapper returns num_beams copies
-    # of the top beam; the vanilla GenerationMixin path must give distinct beams
+    # espnet beam search returns true n-best natively; this stays as the regression
+    # guard that n-best never degrades to copies of the top beam again (the HF
+    # transformers-5 engine needed a workaround for exactly that)
     audio = load_audio(str(audio_file))
     hyps = engine.n_best_decode(audio, num_beams=4, num_return_sequences=4)
     token_seqs = {tuple(t["id"] for t in h["tokens"]) for h in hyps}

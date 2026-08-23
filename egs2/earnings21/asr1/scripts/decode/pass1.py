@@ -4,6 +4,7 @@ import sys
 import time
 import zlib
 from datetime import UTC, datetime
+from importlib.metadata import version
 from pathlib import Path
 
 import torch
@@ -40,8 +41,7 @@ if __name__ == "__main__":
     parser.add_argument("--manifest", type=str, default="data/derived/earnings21/manifest.jsonl", help="Corpus manifest (default: data/derived/earnings21/manifest.jsonl).")
     parser.add_argument("--vad-dir", type=str, default="data/derived/earnings21/vad", help="Per-doc VAD json dir (default: data/derived/earnings21/vad).")
     parser.add_argument("--run-dir", type=str, required=True, help="Run directory to write pass1/ into (required).")
-    parser.add_argument("--model", type=str, default="openai/whisper-large-v3", help="HF model id (default: openai/whisper-large-v3).")
-    parser.add_argument("--revision", type=str, default=None, help="HF model revision to pin (default: None).")
+    parser.add_argument("--model", type=str, default="large-v3", help="openai-whisper model name (default: large-v3).")
     parser.add_argument("--num-beams", type=int, default=8, help="Beam width (default: 8).")
     parser.add_argument("--num-return-sequences", type=int, default=8, help="Hypotheses retained per chunk (default: 8).")
     parser.add_argument("--batch-size", type=int, default=8, help="Chunks decoded per forward (default: 8).")
@@ -64,11 +64,15 @@ if __name__ == "__main__":
         manifest = [m for m in manifest if m["doc_id"] in wanted]
     manifest.sort(key=lambda m: m["doc_id"])
 
-    engine = WhisperEngine(args.model, revision=args.revision)
+    engine = WhisperEngine(args.model)
     append_config(
         run_dir, "pass1",
         {
-            "argv": sys.argv[1:], "model_id": args.model, "model_revision": args.revision,
+            # the whisper package pins checkpoints by sha, so package version + model
+            # name identify the weights; n_vocab lets downstream stages rebuild the
+            # exact tokenizer without loading the model
+            "argv": sys.argv[1:], "model_id": args.model,
+            "whisper_package": version("openai-whisper"), "n_vocab": engine.dims.n_vocab,
             "num_beams": args.num_beams, "num_return_sequences": args.num_return_sequences,
             "batch_size": args.batch_size, "split": args.split,
             "device": str(engine.device),

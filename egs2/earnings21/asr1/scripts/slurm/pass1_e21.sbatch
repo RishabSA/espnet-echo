@@ -20,12 +20,16 @@ export HF_HOME="$work_root/cache/huggingface"
 export TORCH_HOME="$work_root/cache/torch"
 export NLTK_DATA="$work_root/cache/nltk_data"
 export UV_CACHE_DIR="$work_root/cache/uv"
+# openai-whisper checkpoints land in $XDG_CACHE_HOME/whisper; home is too small
+export XDG_CACHE_HOME="$work_root/cache/xdg"
 
 nvidia-smi --query-gpu=name,memory.total --format=csv
 
-uv run python scripts/decode/pass1.py --run-dir runs/e21_wlv3_pass1 --split test --force
-uv run python scripts/decode/pass1.py --run-dir runs/e21_wlv3_pass1 --split dev --force
-# --force: alignment is cheap (~11 GPU-min for the corpus) and rerunning it keeps
-# words.jsonl consistent with the current classifier after any align_words fix
-uv run python scripts/decode/align_words.py --run-dir runs/e21_wlv3_pass1 --force
-uv run python scripts/eval/quick_wer.py --run-dir runs/e21_wlv3_pass1 --split test
+# _espnet suffix: the ESPnet-stack redo of the M2 decode (mentor directive 4); the
+# HF-stack run e21_wlv3_pass1 stays untouched as the reference
+uv run python scripts/decode/pass1.py --run-dir runs/e21_wlv3_pass1_espnet --split test --force
+uv run python scripts/decode/pass1.py --run-dir runs/e21_wlv3_pass1_espnet --split dev --force
+# --force: alignment is cheap and rerunning it keeps words.jsonl consistent with
+# the current classifier after any align_words fix
+uv run python scripts/decode/align_words.py --run-dir runs/e21_wlv3_pass1_espnet --force
+uv run python scripts/eval/quick_wer.py --run-dir runs/e21_wlv3_pass1_espnet --split test

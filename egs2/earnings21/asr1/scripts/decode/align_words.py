@@ -3,16 +3,16 @@ import json
 import re
 import sys
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 
 import torch
 import torchaudio
 from tqdm import tqdm
-from transformers import AutoTokenizer
 
 from scripts.common.audio import load_audio
 from scripts.common.io import append_config, read_jsonl, write_jsonl
-from scripts.common.whisper_engine import pick_device
+from scripts.common.whisper_engine import pick_device, tokenizer_for_vocab
 
 sr = 16000
 # MMS_FA vocabulary is lowercase roman letters plus apostrophe; anything that
@@ -23,7 +23,10 @@ _nonroman_re = re.compile(r"[^a-z']")
 def group_tokens_into_words(tokens: list[dict], text: str, whisper_tok, where: str) -> list[list[dict]]:
     groups = []
     for token in tokens:
-        if token["tok"].startswith("Ġ") or not groups:
+        # byte-level BPE encodes a word boundary as a leading space byte; checking the
+        # raw bytes (not the decoded string) keeps multi-byte characters intact
+        piece = whisper_tok.encoding.decode_single_token_bytes(token["id"])
+        if piece.startswith(b" ") or not groups:
             groups.append([])
         groups[-1].append(token)
     words = [whisper_tok.decode([t["id"] for t in g]).strip() for g in groups]
@@ -47,9 +50,7 @@ if __name__ == "__main__":
 
     run_dir = Path(args.run_dir)
     config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
-    whisper_tok = AutoTokenizer.from_pretrained(
-        config["pass1"]["model_id"], revision=config["pass1"]["model_revision"]
-    )
+    whisper_tok = tokenizer_for_vocab(config["pass1"]["n_vocab"])
 
     device = pick_device()
     bundle = torchaudio.pipelines.MMS_FA
@@ -106,12 +107,14 @@ if __name__ == "__main__":
             try:
                 spans = fa_aligner(emission[0].cpu(), fa_tokenizer(fa_words))
             except Exception as err:  # noqa: BLE001 — classified below, never silent
-                # CTC alignment is infeasible when the text has more characters than
-                # the audio has emission frames: that is a pass-1 decode pathology
-                # (repetition loop; see the chunk's compression_ratio), not an aligner
-                # defect, so it is excluded from the transcript and reported as a
-                # warning instead of triggering aligner escalation
-                if sum(len(w) for w in fa_words) >= emission.shape[1]:
+                # CTC alignment is infeasible when the emission has fewer frames than
+                # target tokens plus the blanks CTC requires between repeated tokens:
+                # that is a pass-1 decode pathology (repetition loop; see the chunk's
+                # compression_ratio), not an aligner defect, so it is excluded from
+                # the transcript and reported as a warning instead of escalation
+                target_ids = [t for word in fa_tokenizer(fa_words) for t in word]
+                repeats = sum(a == b for a, b in pairwise(target_ids))
+                if len(target_ids) + repeats > emission.shape[1]:
                     unalignable.append((where, f"cr={record['compression_ratio']:.2f}"))
                     chunk_labels[record["chunk_id"]] = "unalignable_output"
                 else:
