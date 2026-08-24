@@ -40,3 +40,13 @@ def append_config(run_dir: str | Path, stage: str, entry: dict) -> None:
     sha, dirty = git_sha()
     config[stage] = {**entry, "git_sha": sha, "dirty": dirty}
     config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def read_hyp_text(run_dir: str | Path, phase: str, doc_id: str) -> str:
+    # real runs carry the midgap-stitched transcript; the fixture has no .txt, so
+    # fall back to the chunk 1-bests, which is exact when chunks do not overlap
+    text_path = Path(run_dir) / phase / f"{doc_id}.txt"
+    if text_path.exists():
+        return text_path.read_text(encoding="utf-8")
+    records = read_jsonl(Path(run_dir) / phase / f"{doc_id}.jsonl")
+    return " ".join(r["hyps"][0]["text"] for r in records)

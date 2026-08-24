@@ -3,7 +3,7 @@ from functools import lru_cache
 
 from transformers.models.whisper.english_normalizer import EnglishTextNormalizer
 
-_hyphen_re = re.compile(r"[-‐‑]")
+hyphen_re = re.compile(r"[-‐‑]")
 _nonword_re = re.compile(r"[^\w\s]")
 _space_re = re.compile(r"\s+")
 
@@ -21,7 +21,7 @@ def normalize(text: str, policy: str) -> str:
     if policy == "fold_all":
         # lowercase, hyphens to spaces (so Kai-Fu / Kaifu / Kai Fu collide after a
         # whitespace strip downstream), drop punctuation, collapse whitespace
-        folded = _hyphen_re.sub(" ", text.lower())
+        folded = hyphen_re.sub(" ", text.lower())
         folded = _nonword_re.sub("", folded)
         return _space_re.sub(" ", folded).strip()
     if policy == "openasr":

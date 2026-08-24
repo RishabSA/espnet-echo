@@ -58,5 +58,65 @@
     "pass1_entity_occ_correct": 0.5714285714285714,
     "oracle_entity_occ_correct": 1.0,
     "n_realized_occurrences_eligible": 7
+  },
+  "_note_m3": "M3 additions hand-derived 2026-08-24 before implementation: entity_wer, retrieval, bias (oracle and corrupted lists). Bias lists live in tests/fixtures/tiny_doc/bias_*.txt.",
+  "entity_wer": {
+    "n_ref_entity_words": 9,
+    "pass1": {
+      "overall": 0.4444444444444444,
+      "oracle": 0.1111111111111111,
+      "PERSON": 0.6666666666666666,
+      "ORG": 0.3333333333333333
+    },
+    "pass2": {
+      "overall": 0.3333333333333333,
+      "oracle": 0.3333333333333333,
+      "PERSON": 0.0,
+      "ORG": 0.5
+    },
+    "_note": "oracle picks from the evaluated run's own realization pool: in pass2 e2's pool is {selmark} only, so its two errors survive (3/9), while pass1 still holds Zelmark (1/9)"
+  },
+  "retrieval_recall": {
+    "n_ref_mentions": 9,
+    "pass1": 0.5555555555555556,
+    "pass2": 0.6666666666666666
+  },
+  "bias": {
+    "oracle_list": {
+      "n_biased_ref_words": 9,
+      "pass1": {
+        "b_wer": 0.4444444444444444,
+        "u_wer": 0.01834862385321101,
+        "baer": 0.0,
+        "n_in_list": 5,
+        "insertions": 0
+      },
+      "pass2": {
+        "b_wer": 0.3333333333333333,
+        "u_wer": 0.01834862385321101,
+        "baer": 0.0,
+        "n_in_list": 6,
+        "insertions": 0
+      }
+    },
+    "corrupted_list": {
+      "_note": "Kowalsky and Selmark stand in for Kowalski and Zelmark: their errors fall into U-WER and B-WER improves, the Le-2021 blind spot; A pairs pass2 (biased) against pass1 (baseline) over 8 realized occurrences each",
+      "n_biased_ref_words": 4,
+      "pass1": {
+        "b_wer": 0.25,
+        "u_wer": 0.043859649122807015,
+        "baer": 0.5,
+        "n_in_list": 6,
+        "insertions": 0
+      },
+      "pass2": {
+        "b_wer": 0.25,
+        "u_wer": 0.03508771929824561,
+        "baer": 0.4,
+        "n_in_list": 5,
+        "insertions": 0
+      },
+      "amplification_pass2_vs_pass1": 0.6666666666666666
+    }
   }
 }

@@ -6,7 +6,7 @@ Research project with CMU WAVLab. This is a single project recipe hosting every 
 
 ## Layout
 
-- `scripts/` flat CLI scripts: `common/` (engine, normalization, phonetics, IO), `data/` (corpus prep, VAD), `decode/` (pass 1, word alignment), `eval/`, `analysis/`, `slurm/`
+- `scripts/` flat CLI scripts: `common/` (engine, normalization, phonetics, IO), `data/` (corpus prep, VAD), `decode/` (pass 1, word alignment), `eval/` (entity metrics, bootstrap stats, optional fstalign check), `report/` (tables from summary.json), `analysis/`, `slurm/`
 - `tests/` pytest suite incl. the frozen `tiny_doc` metric fixture
 - `data/`, `runs/` local artifacts (gitignored); `docs/` full project documentation (local only)
 
