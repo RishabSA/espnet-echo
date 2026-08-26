@@ -15,10 +15,10 @@ from scripts.common.io import append_config, create_run_dir, read_jsonl, write_j
 from scripts.common.whisper_engine import WhisperEngine
 
 
-def decode_batch(engine: WhisperEngine, slices: list[torch.Tensor], args) -> list[list[dict]]:
+def decode_batch(engine: WhisperEngine, slices: list[torch.Tensor], args, prompt: str | None = None) -> list[list[dict]]:
     try:
         return engine.n_best_decode_batch(
-            slices, num_beams=args.num_beams, num_return_sequences=args.num_return_sequences
+            slices, num_beams=args.num_beams, num_return_sequences=args.num_return_sequences, prompt=prompt
         )
     except (torch.OutOfMemoryError, RuntimeError) as err:
         if "out of memory" not in str(err).lower():
@@ -31,7 +31,7 @@ def decode_batch(engine: WhisperEngine, slices: list[torch.Tensor], args) -> lis
             for part in (slices[:half], slices[half:])
             if part
             for hyp in engine.n_best_decode_batch(
-                part, num_beams=args.num_beams, num_return_sequences=args.num_return_sequences
+                part, num_beams=args.num_beams, num_return_sequences=args.num_return_sequences, prompt=prompt
             )
         ]
 
@@ -97,7 +97,13 @@ if __name__ == "__main__":
             batch = chunks[lo : lo + args.batch_size]
             # overlap is decode-time context only; stored bounds stay the raw chunk
             slices = [slice_audio(audio, c["start"], c["end"], pad_s=overlap) for c in batch]
-            for chunk, hyps in zip(batch, decode_batch(engine, slices, args), strict=True):
+            if any("prompt" in c for c in batch):
+                # prompts are per chunk (E1 context conditions, baseline 2) and the engine takes one
+                # prompt per call; only the encoder was batched anyway, so decode these one at a time
+                decoded = [decode_batch(engine, [s], args, prompt=c.get("prompt"))[0] for c, s in zip(batch, slices, strict=True)]
+            else:
+                decoded = decode_batch(engine, slices, args)
+            for chunk, hyps in zip(batch, decoded, strict=True):
                 record = {
                     "doc_id": doc["doc_id"], "chunk_id": chunk["chunk_id"],
                     "start": chunk["start"], "end": chunk["end"], "hyps": hyps,
