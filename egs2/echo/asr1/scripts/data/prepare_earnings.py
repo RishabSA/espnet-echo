@@ -11,7 +11,7 @@ import soundfile as sf
 from tqdm import tqdm
 
 from scripts.common.io import write_jsonl
-from scripts.common.nlp_refs import extract_entities, parse_nlp
+from scripts.common.nlp_refs import extract_entities, extract_entities_from_tags, parse_nlp
 
 
 def convert_audio(src: Path, dst: Path, force: bool) -> None:
@@ -55,7 +55,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="P0: Earnings-21/22 corpus preparation (spec 07 section 6.1).")
     parser.add_argument("--raw-dir", type=str, default="data/raw/speech-datasets/earnings21", help="Raw corpus dir with media/ and transcripts/ (default: data/raw/speech-datasets/earnings21).")
     parser.add_argument("--out-dir", type=str, default="data/derived/earnings21", help="Output dir for derived artifacts (default: data/derived/earnings21).")
-    parser.add_argument("--corpus", type=str, default="earnings21", help="Corpus name written into the manifest (default: earnings21).")
+    parser.add_argument("--corpus", type=str, default="earnings21", choices=["earnings21", "earnings22"], help="Corpus name; selects the metadata layout and entity-tag convention (default: earnings21).")
+    parser.add_argument("--allow-unmatched", action="store_true", help="Skip .nlp files without a metadata row instead of raising; Earnings-22 media names are inconsistent (default: False).")
     parser.add_argument("--dev-frac", type=float, default=0.5, help="Fraction of documents in the dev split (default: 0.5).")
     parser.add_argument("--seed", type=int, default=42, help="Split RNG seed (default: 42).")
     parser.add_argument("--force", action="store_true", help="Redraw splits and re-encode audio even if outputs exist (default: False).")
@@ -69,27 +70,50 @@ if __name__ == "__main__":
     nlp_dir = raw / "transcripts" / "nlp_references"
     tag_dir = raw / "transcripts" / "wer_tags"
     media_dir = raw / "media"
-    for d in ["audio", "refs", "ref_entities"]:
+    # E22's public release carries no named-entity tags (verified 2026-08-31, docs/06 entry 24):
+    # its native normalization tags go to ref_entities_nlp/ and the canonical ref_entities/
+    # comes from build_ref_entity_index.py (spaCy projection), as for AMI and TED-LIUM
+    index_dirname = "ref_entities" if args.corpus == "earnings21" else "ref_entities_nlp"
+    for d in ["audio", "refs", index_dirname] + (["ref_words"] if args.corpus != "earnings21" else []):
         os.makedirs(out / d, exist_ok=True)
 
-    meta_csv = raw / f"{args.corpus}-file-metadata.csv"
+    # both corpora stratify splits on the meta "sector" key: sector for E21, language region for E22
     meta = {}
-    with open(meta_csv, encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            meta[row["file_id"]] = {
-                "company": row["company_name"],
-                "sector": row["sector"],
-                "quarter": row["financial_quarter"],
-                "n_speakers": int(row["unique_speakers"]),
-                "csv_duration_s": float(row["audio_length"]),
-            }
+    if args.corpus == "earnings21":
+        meta_csv = raw / f"{args.corpus}-file-metadata.csv"
+        with open(meta_csv, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                meta[row["file_id"]] = {
+                    "company": row["company_name"],
+                    "sector": row["sector"],
+                    "quarter": row["financial_quarter"],
+                    "n_speakers": int(row["unique_speakers"]),
+                    "csv_duration_s": float(row["audio_length"]),
+                }
+    else:
+        meta_csv = raw / "metadata.csv"
+        with open(meta_csv, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                meta[row["File ID"]] = {
+                    "ticker": row["Ticker Symbol"],
+                    "country": row["Country by Ticker"],
+                    "dialect": row["Major Dialect Family"],
+                    "sector": row["Language Family + Area Based"],
+                    "csv_duration_s": float(row["File Length (seconds)"]),
+                }
 
     docs = sorted(p.stem for p in nlp_dir.glob("*.nlp"))
     if not docs:
         raise FileNotFoundError(f"no .nlp files under {nlp_dir}")
     missing_meta = [d for d in docs if d not in meta]
-    if missing_meta:
-        raise ValueError(f"docs without metadata rows: {missing_meta}")
+    if missing_meta and args.allow_unmatched:
+        print(f"skipping {len(missing_meta)} .nlp files without metadata rows: {missing_meta}")
+        docs = [d for d in docs if d in meta]
+    elif missing_meta:
+        raise ValueError(f"docs without metadata rows: {missing_meta} (pass --allow-unmatched to skip)")
+    missing_files = sorted(set(meta) - set(docs))
+    if missing_files:
+        raise ValueError(f"metadata rows without .nlp files: {missing_files}")
 
     splits_path = out / "splits.json"
     if splits_path.exists() and not args.force:
@@ -112,16 +136,22 @@ if __name__ == "__main__":
         duration_s = sf.info(str(wav_path)).duration
 
         rows = parse_nlp(nlp_dir / f"{doc}.nlp")
-        tag_types = json.loads((tag_dir / f"{doc}.wer_tag.json").read_text(encoding="utf-8"))
-        entities, stats = extract_entities(rows, tag_types, doc)
+        if args.corpus == "earnings21":
+            tag_types = json.loads((tag_dir / f"{doc}.wer_tag.json").read_text(encoding="utf-8"))
+            entities, stats = extract_entities(rows, tag_types, doc)
+        else:
+            entities, stats = extract_entities_from_tags(rows, doc)
         skipped_tags_total += stats["n_skipped_tag_ids"]
 
         # raw tokens, space-joined: token index == whitespace index, the invariant
         # ref_entities spans rely on; metric-time normalization handles punctuation
         ref_path = out / "refs" / f"{doc}.txt"
         ref_path.write_text(" ".join(r["token"] for r in rows) + "\n", encoding="utf-8")
+        if args.corpus != "earnings21":
+            (out / "ref_words" / f"{doc}.json").write_text(
+                json.dumps([{"start": r["ts"], "end": r["end_ts"], "speaker": r["speaker"]} for r in rows]) + "\n", encoding="utf-8")
 
-        (out / "ref_entities" / f"{doc}.json").write_text(
+        (out / index_dirname / f"{doc}.json").write_text(
             json.dumps(
                 {
                     "doc_id": doc,
@@ -159,7 +189,7 @@ if __name__ == "__main__":
     write_jsonl(out / "manifest.jsonl", manifest)
 
     wav_h = sum(m["duration_s"] for m in manifest) / 3600
-    csv_h = sum(m["csv_duration_s"] for m in meta.values()) / 3600
+    csv_h = sum(meta[d]["csv_duration_s"] for d in docs) / 3600
     print(f"{len(manifest)} docs, {wav_h:.2f} h of wav (metadata says {csv_h:.2f} h)")
     print(f"skipped wer_tag ids: {skipped_tags_total}")
     if abs(wav_h - csv_h) / csv_h > 0.01:

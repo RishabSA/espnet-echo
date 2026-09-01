@@ -3,6 +3,7 @@ name = "echo-asr"
 version = "0.1.0"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+    "en-core-web-lg",
     "espnet",
     "g2p-en>=2.1.0",
     "jiwer>=4.0.0",
@@ -41,6 +42,7 @@ llm = [
 # espnet2 patches on the echo-asr branch are picked up directly
 [tool.uv.sources]
 espnet = { path = "../../..", editable = true }
+en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
 
 [build-system]
 requires = ["hatchling"]
