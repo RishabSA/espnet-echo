@@ -21,14 +21,14 @@ export XDG_CACHE_HOME="$work_root/cache/xdg"
 
 mkdir -p data/raw/ami
 if [ ! -d data/raw/ami/annotations/words ]; then
-  wget -q "https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip" -O data/raw/ami/ami_public_manual.zip
+  wget -nv "https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip" -O data/raw/ami/ami_public_manual.zip
   unzip -q -o data/raw/ami/ami_public_manual.zip -d data/raw/ami/annotations
 fi
 for m in $(uv run python -c "from scripts.data.prepare_ami import dev_meetings, eval_meetings; print(' '.join(dev_meetings + eval_meetings))"); do
   f="data/raw/ami/amicorpus/$m/audio/$m.Mix-Headset.wav"
   if [ ! -f "$f" ]; then
     mkdir -p "data/raw/ami/amicorpus/$m/audio"
-    wget -q "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror//amicorpus/$m/audio/$m.Mix-Headset.wav" -O "$f"
+    wget -nv "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror//amicorpus/$m/audio/$m.Mix-Headset.wav" -O "$f"
   fi
 done
 uv run python scripts/data/prepare_ami.py

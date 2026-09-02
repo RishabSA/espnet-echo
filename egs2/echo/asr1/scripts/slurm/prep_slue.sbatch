@@ -22,7 +22,7 @@ export XDG_CACHE_HOME="$work_root/cache/xdg"
 
 mkdir -p data/raw/slue
 if [ ! -d data/raw/slue/slue-voxpopuli ]; then
-  wget -q "https://public-dataset-model-store.awsdev.asapp.com/users/sshon/public/slue/slue-voxpopuli_v0.2_blind.zip" -O data/raw/slue/slue-voxpopuli.zip
+  wget -nv "https://public-dataset-model-store.awsdev.asapp.com/users/sshon/public/slue/slue-voxpopuli_v0.2_blind.zip" -O data/raw/slue/slue-voxpopuli.zip
   unzip -q -o data/raw/slue/slue-voxpopuli.zip -d data/raw/slue
 fi
 uv run python scripts/data/prepare_slue.py
