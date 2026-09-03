@@ -17,6 +17,10 @@ from scripts.common.nlp_refs import extract_entities, extract_entities_from_tags
 def convert_audio(src: Path, dst: Path, force: bool) -> None:
     if dst.exists() and not force:
         return
+    # a sparse checkout without git-lfs leaves pointer text where the audio should be
+    with open(src, "rb") as f:
+        if f.read(7) == b"version":
+            raise RuntimeError(f"{src} is a git-lfs pointer, not audio; fetch the LFS objects first (see scripts/slurm/prep_e22.sbatch)")
     result = subprocess.run(
         ["ffmpeg", "-y", "-i", str(src), "-ac", "1", "-ar", "16000", "-sample_fmt", "s16",
          "-loglevel", "error", str(dst)],
