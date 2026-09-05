@@ -1,0 +1,58 @@
+# earnings-call boilerplate that passes the mining signals but is never an entity variant;
+# one phrase per line, matched on the fold_all form of the candidate (spec 07 section 6.5)
+operator
+gaap
+non gaap
+eps
+ebitda
+adjusted ebitda
+ebit
+capex
+opex
+sga
+r d
+fx
+ir
+yoy
+q one
+q two
+q three
+q four
+q1
+q2
+q3
+q4
+h1
+h2
+fy
+fiscal
+ceo
+cfo
+coo
+cto
+cmo
+evp
+svp
+vp
+q a
+qa
+bps
+basis points
+guidance
+january
+february
+march
+april
+may
+june
+july
+august
+september
+october
+november
+december
+monday
+tuesday
+wednesday
+thursday
+friday

@@ -12,14 +12,20 @@ def token_starts(tokens: list[str]) -> list[int]:
     return starts
 
 
+def span_to_tokens(starts: list[int], char_start: int, char_end: int) -> tuple[int, int]:
+    # inclusive token span covering the character range [char_start, char_end)
+    a = bisect_right(starts, char_start) - 1
+    b = bisect_right(starts, max(char_start, char_end - 1)) - 1
+    return a, b
+
+
 def mentions_to_entities(tokens: list[str], mentions: list[tuple[str, int, int]], word_meta: list[dict] | None = None) -> list[dict]:
     # mentions are (category, char_start, char_end) into " ".join(tokens); grouping follows the
     # pinned rule of spec 07 section 5.3: (category, fold_all surface) within the document
     starts = token_starts(tokens)
     groups = {}
     for category, char_start, char_end in mentions:
-        a = bisect_right(starts, char_start) - 1
-        b = bisect_right(starts, max(char_start, char_end - 1)) - 1
+        a, b = span_to_tokens(starts, char_start, char_end)
         surface = " ".join(tokens[a : b + 1])
         occ = {"span": [a, b], "surface": surface}
         if word_meta is not None:
